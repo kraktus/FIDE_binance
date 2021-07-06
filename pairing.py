@@ -37,9 +37,12 @@ PLAYER_REGEX = re.compile(r"^(\d+) +(\w+) +\d+.+ +(\w+) +\d+") # re.compile(r"(\
 G_DOC_PATH = "sample.txt"
 LOG_PATH = "pair.log"
 
-PAIRING_API = "TODO"
+BASE = "https://lichess.org"
+if __debug__: 
+    BASE = "http://localhost:9663"  
+PAIRING_API = BASE + "/api/challenge/admin/{}/{}"
 
-API_KEY = f"Authorization: Bearer {os.getenv('TOKEN')}"
+API_KEY = {"Authorization": f"Bearer {os.getenv('TOKEN')}"}
 
 RETRY_STRAT = Retry(
     total=5,
@@ -113,14 +116,16 @@ class Db:
             ) VALUES (?, ?)
             ''', (pair.white_player, pair.black_player))
 
-    def get_unpaired_players(self: Db) -> Iterator[Tuple[str, str, str]]:
-        return self.cur.execute('''SELECT 
+    def get_unpaired_players(self: Db, round: int) -> List[Tuple[int, Pair]]:
+        raw_data = self.cur.execute('''SELECT 
             rowId, 
             white_player,
             black_player
             FROM rounds
-            WHERE lichess_game_id IS NULL
-            ''')
+            WHERE lichess_game_id IS NULL AND round_nb = ?
+            ''', round)
+        return [(int(row_id), Pair(white_player, black_player))for row_id, white_player, black_player in raw_data]
+
 
     def add_lichess_game_id(self: Db, rowId: int, game_id: str) -> None:
         self.cur.execute('''UPDATE rounds
@@ -161,7 +166,8 @@ class Pair:
 
 class Pairing:
 
-    def __init__(self: Pairing) -> None:
+    def __init__(self: Pairing, db: Db) -> None:
+        self.db = db
         http = requests.Session()
         http.mount("https://", ADAPTER)
         http.mount("http://", ADAPTER)
@@ -171,6 +177,25 @@ class Pairing:
     def tl(self: Pairing) -> float:
         """time elapsed"""
         return time.time() - self.dep
+
+    def pair_all_players(self: Pairing, round: int) -> None:
+        for row_id, pair in self.db.get_unpaired_players(round):
+            pass
+
+    def create_game(self: Pairing, pair: Pair) -> str:
+        """Return the lichess game id of the game created"""
+        url = PAIRING_API.format(pair.white_player, pair.black_player)
+        payload = {
+            "rated": "true",
+            "clock.limit": 600,
+            "clock.increment": 2,
+            "color": "white"
+        }
+        r = self.http.post(url, data=payload, headers=API_KEY)
+        rep = r.json()
+        log.info(rep)
+
+
 
 #############
 # Functions #
@@ -189,15 +214,20 @@ def show() -> None:
 def test() -> None:
     db = Db()
     f = FileHandler(db)
-    log.info([x for x in db.get_unpaired_players()])
-    db.add_lichess_game_id(rowId=2, game_id="12345678")
+    p = Pairing(db)
+    p.create_game(Pair("test", "test2"))
 
-def fetch() -> None:
+def fetch(round: int) -> None:
     """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
     f = FileHandler(Db())
     f.fetch()
 
-def pair() -> None:
+def pair(round: int) -> None:
+    """Create a challenge for every couple of players that has not been already paired"""
+    pass
+
+def result(round: int) -> None:
+    """Fetch all games from that round, check if they are finished, and print the results"""
     pass
 
 def doc(dic: Dict[str, Callable[..., Any]]) -> str:
@@ -215,6 +245,7 @@ def main() -> None:
     "test": test,
     "fetch": fetch,
     "pair": pair,
+    "result": result,
     }
     parser.add_argument("command", choices=commands.keys(), help=doc(commands))
     args = parser.parse_args()
