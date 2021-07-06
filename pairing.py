@@ -20,6 +20,7 @@ import sqlite3
 import sys
 
 from argparse import RawTextHelpFormatter
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
@@ -31,14 +32,14 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 load_dotenv()
 
-PLAYER_REGEX = re.compile(r"(\w+) +\d+")
+PLAYER_REGEX = re.compile(r"^(\d+) +(\w+) +\d+.+ +(\w+) +\d+") # re.compile(r"(\w+) +\d+")
 
 G_DOC_PATH = "sample.txt"
 LOG_PATH = "pair.log"
 
 PAIRING_API = "TODO"
 
-API_KEY = f"Authorization: Bearer {os.getenv("TOKEN")}"
+API_KEY = f"Authorization: Bearer {os.getenv('TOKEN')}"
 
 RETRY_STRAT = Retry(
     total=5,
@@ -97,7 +98,6 @@ class Db:
             name NOT LIKE 'sqlite_%';""")
         clean_tables = [t[0] for t in tables]
         log.info(f"List of table's names: {clean_tables}")
-        log.info(tables)
         for table in clean_tables:
             struct = self.cur.execute(f'PRAGMA table_info({table})') # discouraged but qmark does not work here for some reason
             log.info(f"{table} structure: {[t for t in struct]}")
@@ -105,13 +105,13 @@ class Db:
             log.info(f"{table} rows: {[t for t in rows]}")
 
 
-    def add_players(self: Db, white_player: str, black_player: str) -> None:
+    def add_players(self: Db, pair: Pair) -> None:
         self.cur.execute('''INSERT INTO rounds
             (
             white_player,
             black_player
             ) VALUES (?, ?)
-            ''', (white_player, black_player))
+            ''', (pair.white_player, pair.black_player))
 
     def get_unpaired_players(self: Db) -> Iterator[Tuple[str, str, str]]:
         return self.cur.execute('''SELECT 
@@ -133,20 +133,31 @@ class FileHandler:
     def __init__(self: FileHandler, db: Db) -> None:
         self.db = db
 
-    def get_pairing(self: FileHandler) -> List[Tuple[str]]:
+    def get_pairing(self: FileHandler) -> List[Pair]:
         l: List[str] = []
         with open(G_DOC_PATH) as input_:
             for line in input_:
-                raw_res: Tuple[str] = PLAYER_REGEX.findall(line)
-                if len(raw_res) != 2:
-                    log.error(f"Player usernames not fetched properly, result: {raw_res}")
+                match = PLAYER_REGEX.match(line)
+                if match is None:
+                    continue
+                log.info(match.groups())
+                (table_number, player_1, player_2) = match.groups()
+                if int(table_number) % 2: # odd numbers have white player on left 
+                    pair = Pair(white_player=player_1, black_player=player_2)
                 else:
-                    l.append(raw_res)
+                    pair = Pair(white_player=player_2, black_player=player_1)
+                log.info(pair)
+                l.append(pair)
         return l
 
     def fetch(self: FileHandler) -> None:
-        for (white_player, black_player) in self.get_pairing():
-            self.db.add_players(white_player, black_player)
+        for pair in self.get_pairing():
+            self.db.add_players(pair)
+
+@dataclass
+class Pair:
+    white_player: str
+    black_player: str
 
 class Pairing:
 
