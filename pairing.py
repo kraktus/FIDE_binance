@@ -34,15 +34,16 @@ load_dotenv()
 
 PLAYER_REGEX = re.compile(r"^(\d+) +(\w+) +\d+.+ +(\w+) +\d+") # re.compile(r"(\w+) +\d+")
 
-G_DOC_PATH = "sample.txt"
+G_DOC_PATH = "round_{}.txt"
 LOG_PATH = "pair.log"
 
 BASE = "https://lichess.org"
 if __debug__: 
     BASE = "http://localhost:9663"  
 PAIRING_API = BASE + "/api/challenge/admin/{}/{}"
+LOOKUP_API = BASE + "/games/export/_ids"
 
-API_KEY = {"Authorization": f"Bearer {os.getenv('TOKEN')}"}
+API_KEY = {"Authorization": f"Bearer {os.getenv('TOKEN')}", "Accept": "application/x-ndjson"}
 
 RETRY_STRAT = Retry(
     total=5,
@@ -118,13 +119,14 @@ class Db:
             ''', (pair.white_player, pair.black_player, round_nb))
 
     def get_unpaired_players(self: Db, round_nb: int) -> List[Tuple[int, Pair]]:
-        raw_data = self.cur.execute('''SELECT 
+        raw_data = list(self.cur.execute('''SELECT 
             rowId, 
             white_player,
             black_player
             FROM rounds
             WHERE lichess_game_id IS NULL AND round_nb = ?
-            ''', round_nb)
+            ''', (round_nb,)))
+        log.info(f"Round {round_nb}, {len(raw_data)} games to be created")
         return [(int(row_id), Pair(white_player, black_player))for row_id, white_player, black_player in raw_data]
 
     def add_lichess_game_id(self: Db, row_id: int, game_id: str) -> None:
@@ -133,14 +135,30 @@ class Db:
             WHERE
             rowId = ?''', (game_id, row_id))
 
+    def get_unfinished_games(self: Db, round_nb: int) -> Dict[str, int]:
+        raw_data = list(self.cur.execute('''SELECT 
+            rowId, 
+            lichess_game_id,
+            FROM rounds
+            WHERE lichess_game_id IS NOT NULL AND result IS NULL AND round_nb = ?
+            ''', (round_nb,)))
+        log.info(f"Round {round_nb}, {len(raw_data)} games unfinished")
+        return {game_id: int(row_id) for row_id, game_id in raw_data}
+
+    def add_game_result(self: Db, row_id: int, result: int) -> None:
+        self.cur.execute('''UPDATE rounds
+            SET result = ?
+            WHERE
+            rowId = ?''', (result, row_id))
+
 class FileHandler:
 
     def __init__(self: FileHandler, db: Db) -> None:
         self.db = db
 
-    def get_pairing(self: FileHandler) -> List[Pair]:
-        l: List[str] = []
-        with open(G_DOC_PATH) as input_:
+    def get_pairing(self: FileHandler, round_nb: int) -> List[Pair]:
+        l: List[Pair] = []
+        with open(G_DOC_PATH.format(round_nb)) as input_:
             for line in input_:
                 match = PLAYER_REGEX.match(line)
                 if match is None:
@@ -156,7 +174,7 @@ class FileHandler:
         return l
 
     def fetch(self: FileHandler, round_nb: int) -> None:
-        for pair in self.get_pairing():
+        for pair in self.get_pairing(round_nb):
             self.db.add_players(pair, round_nb)
 
 @dataclass
@@ -197,6 +215,17 @@ class Pairing:
         log.debug(rep)
         return rep["game"]["id"]
 
+    def check_all_results(self: Pairing, round_nb: int) -> None:
+        games_dic = self.db.get_unfinished_games(round_nb)
+        r = self.http.post(LOOKUP_API, data=",".join(games_dic.keys()), headers=API_KEY, params={"moves": "false"})
+        rep = r.json()
+        for game in rep:
+            res = game["status"]
+            id_ = game["id"]
+            log.info(f"Game {id_}, result: {res}")
+
+
+
 
 
 #############
@@ -234,7 +263,7 @@ def result(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
     pass
 
-def doc(dic: Dict[str, Callable[..., Any]]) -> str:
+def doc(dic: Dict[str, function]) -> str:
     """Produce documentation for every command based on doc of each function"""
     doc_string = ""
     for name_cmd, func in dic.items():
