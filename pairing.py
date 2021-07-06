@@ -46,7 +46,7 @@ API_KEY = {"Authorization": f"Bearer {os.getenv('TOKEN')}"}
 
 RETRY_STRAT = Retry(
     total=5,
-    backoff_factor=200,
+    backoff_factor=5,
     status_forcelist=[429, 500, 502, 503, 504],
     method_whitelist=["GET"]
 )
@@ -83,7 +83,7 @@ class Db:
         self.cur = self.con.cursor()
 
     def create_db(self: Db) -> None:
-        # Since the event is divided in two parts, `round_nb` will first indicate the round number in the round-robin then advancement in the knockdown event
+        # Since the event is divided in two parts, `round_nb` will first indicate the round_nb number in the round-robin then advancement in the knockdown event
         # `result` 0 = black wins, 1 = white wins, 2 = draw, 3 = unknown (everything else)
         # `rowId` is the primary key and is create silently
         self.cur.execute('''CREATE TABLE rounds
@@ -108,30 +108,30 @@ class Db:
             log.info(f"{table} rows: {[t for t in rows]}")
 
 
-    def add_players(self: Db, pair: Pair) -> None:
+    def add_players(self: Db, pair: Pair, round_nb: int) -> None:
         self.cur.execute('''INSERT INTO rounds
             (
             white_player,
-            black_player
-            ) VALUES (?, ?)
-            ''', (pair.white_player, pair.black_player))
+            black_player,
+            round_nb
+            ) VALUES (?, ?, ?)
+            ''', (pair.white_player, pair.black_player, round_nb))
 
-    def get_unpaired_players(self: Db, round: int) -> List[Tuple[int, Pair]]:
+    def get_unpaired_players(self: Db, round_nb: int) -> List[Tuple[int, Pair]]:
         raw_data = self.cur.execute('''SELECT 
             rowId, 
             white_player,
             black_player
             FROM rounds
             WHERE lichess_game_id IS NULL AND round_nb = ?
-            ''', round)
+            ''', round_nb)
         return [(int(row_id), Pair(white_player, black_player))for row_id, white_player, black_player in raw_data]
 
-
-    def add_lichess_game_id(self: Db, rowId: int, game_id: str) -> None:
+    def add_lichess_game_id(self: Db, row_id: int, game_id: str) -> None:
         self.cur.execute('''UPDATE rounds
             SET lichess_game_id = ?
             WHERE
-            rowId = ?''', (game_id, rowId))
+            rowId = ?''', (game_id, row_id))
 
 class FileHandler:
 
@@ -155,9 +155,9 @@ class FileHandler:
                 l.append(pair)
         return l
 
-    def fetch(self: FileHandler) -> None:
+    def fetch(self: FileHandler, round_nb: int) -> None:
         for pair in self.get_pairing():
-            self.db.add_players(pair)
+            self.db.add_players(pair, round_nb)
 
 @dataclass
 class Pair:
@@ -178,9 +178,10 @@ class Pairing:
         """time elapsed"""
         return time.time() - self.dep
 
-    def pair_all_players(self: Pairing, round: int) -> None:
-        for row_id, pair in self.db.get_unpaired_players(round):
-            pass
+    def pair_all_players(self: Pairing, round_nb: int) -> None:
+        for row_id, pair in self.db.get_unpaired_players(round_nb):
+            game_id = self.create_game(pair)
+            self.db.add_lichess_game_id(row_id, game_id)
 
     def create_game(self: Pairing, pair: Pair) -> str:
         """Return the lichess game id of the game created"""
@@ -193,7 +194,8 @@ class Pairing:
         }
         r = self.http.post(url, data=payload, headers=API_KEY)
         rep = r.json()
-        log.info(rep)
+        log.debug(rep)
+        return rep["game"]["id"]
 
 
 
@@ -201,33 +203,35 @@ class Pairing:
 # Functions #
 #############
 
-def create_db() -> None:
+def create_db(*args) -> None:
     """Setup the sqlite database, should be run once first when getting the script"""
     db = Db()
     db.create_db()
 
-def show() -> None:
+def show(*args) -> None:
     """Show the current state of the database. For debug purpose only"""
     db = Db()
     db.show()
 
-def test() -> None:
+def test(*args) -> None:
     db = Db()
     f = FileHandler(db)
     p = Pairing(db)
     p.create_game(Pair("test", "test2"))
 
-def fetch(round: int) -> None:
+def fetch(round_nb: int) -> None:
     """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
     f = FileHandler(Db())
-    f.fetch()
+    f.fetch(round_nb)
 
-def pair(round: int) -> None:
+def pair(round_nb: int) -> None:
     """Create a challenge for every couple of players that has not been already paired"""
-    pass
+    db = Db()
+    p = Pairing(db)
+    p.pair_all_players(round_nb)
 
-def result(round: int) -> None:
-    """Fetch all games from that round, check if they are finished, and print the results"""
+def result(round_nb: int) -> None:
+    """Fetch all games from that round_nb, check if they are finished, and print the results"""
     pass
 
 def doc(dic: Dict[str, Callable[..., Any]]) -> str:
@@ -248,8 +252,9 @@ def main() -> None:
     "result": result,
     }
     parser.add_argument("command", choices=commands.keys(), help=doc(commands))
+    parser.add_argument("round_nb", type=int, help="The round number related to the action you want to do. Only used for `fetch`, `pair`, `result`")
     args = parser.parse_args()
-    commands[args.command]()
+    commands[args.command](args.round_nb)
 
 ########
 # Main #
