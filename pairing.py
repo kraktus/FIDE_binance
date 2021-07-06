@@ -38,6 +38,8 @@ LOG_PATH = "pair.log"
 
 PAIRING_API = "TODO"
 
+API_KEY = f"Authorization: Bearer {os.getenv("TOKEN")}"
+
 RETRY_STRAT = Retry(
     total=5,
     backoff_factor=200,
@@ -111,18 +113,40 @@ class Db:
             ) VALUES (?, ?)
             ''', (white_player, black_player))
 
+    def get_unpaired_players(self: Db) -> Iterator[Tuple[str, str, str]]:
+        return self.cur.execute('''SELECT 
+            rowId, 
+            white_player,
+            black_player
+            FROM rounds
+            WHERE lichess_game_id IS NULL
+            ''')
+
+    def add_lichess_game_id(self: Db, rowId: int, game_id: str) -> None:
+        self.cur.execute('''UPDATE rounds
+            SET lichess_game_id = ?
+            WHERE
+            rowId = ?''', (game_id, rowId))
+
 class FileHandler:
 
-    def get_pairing(self: FileHandler) -> List[List[str]]:
+    def __init__(self: FileHandler, db: Db) -> None:
+        self.db = db
+
+    def get_pairing(self: FileHandler) -> List[Tuple[str]]:
         l: List[str] = []
         with open(G_DOC_PATH) as input_:
             for line in input_:
-                raw_res: List[str] = PLAYER_REGEX.findall(line)
+                raw_res: Tuple[str] = PLAYER_REGEX.findall(line)
                 if len(raw_res) != 2:
                     log.error(f"Player usernames not fetched properly, result: {raw_res}")
                 else:
                     l.append(raw_res)
         return l
+
+    def fetch(self: FileHandler) -> None:
+        for (white_player, black_player) in self.get_pairing():
+            self.db.add_players(white_player, black_player)
 
 class Pairing:
 
@@ -146,9 +170,24 @@ def create_db() -> None:
     db = Db()
     db.create_db()
 
-def test() -> None:
+def show() -> None:
+    """Show the current state of the database. For debug purpose only"""
     db = Db()
     db.show()
+
+def test() -> None:
+    db = Db()
+    f = FileHandler(db)
+    log.info([x for x in db.get_unpaired_players()])
+    db.add_lichess_game_id(rowId=2, game_id="12345678")
+
+def fetch() -> None:
+    """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
+    f = FileHandler(Db())
+    f.fetch()
+
+def pair() -> None:
+    pass
 
 def doc(dic: Dict[str, Callable[..., Any]]) -> str:
     """Produce documentation for every command based on doc of each function"""
@@ -160,8 +199,11 @@ def doc(dic: Dict[str, Callable[..., Any]]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter)
     commands = {
-    "create": create_db,
+    "create_db": create_db,
+    "show": show,
     "test": test,
+    "fetch": fetch,
+    "pair": pair,
     }
     parser.add_argument("command", choices=commands.keys(), help=doc(commands))
     args = parser.parse_args()
