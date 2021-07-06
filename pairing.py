@@ -145,6 +145,15 @@ class Db:
         log.info(f"Round {round_nb}, {len(raw_data)} games unfinished")
         return {game_id: int(row_id) for row_id, game_id in raw_data}
 
+    def get_game_ids(self: Db, round_nb: int) -> str:
+        raw_data = list(self.cur.execute('''SELECT 
+            lichess_game_id
+            FROM rounds
+            WHERE lichess_game_id IS NOT NULL AND round_nb = ?
+            ''', (round_nb,)))
+        log.info(f"Round {round_nb}, {len(raw_data)} games started")
+        return " ".join(raw_data)
+
     def add_game_result(self: Db, row_id: int, result: int) -> None:
         self.cur.execute('''UPDATE rounds
             SET result = ?
@@ -226,8 +235,6 @@ class Pairing:
 
 
 
-
-
 #############
 # Functions #
 #############
@@ -263,6 +270,11 @@ def result(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
     pass
 
+def broadcast(round_nb: int) -> None:
+    """Return game ids of the round `round_nb` separated by a space"""
+    db = Db()
+    print(db.get_game_ids(round_nb))
+
 def doc(dic: Dict[str, function]) -> str:
     """Produce documentation for every command based on doc of each function"""
     doc_string = ""
@@ -279,6 +291,7 @@ def main() -> None:
     "fetch": fetch,
     "pair": pair,
     "result": result,
+    "broadcast": broadcast,
     }
     parser.add_argument("command", choices=commands.keys(), help=doc(commands))
     parser.add_argument("round_nb", type=int, help="The round number related to the action you want to do. Only used for `fetch`, `pair`, `result`")
