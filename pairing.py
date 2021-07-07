@@ -140,7 +140,7 @@ class Db:
     def get_unfinished_games(self: Db, round_nb: int) -> Dict[str, int]:
         raw_data = list(self.cur.execute('''SELECT 
             rowId, 
-            lichess_game_id,
+            lichess_game_id
             FROM rounds
             WHERE lichess_game_id IS NOT NULL AND result IS NULL AND round_nb = ?
             ''', (round_nb,)))
@@ -229,9 +229,13 @@ class Pairing:
 
     def check_all_results(self: Pairing, round_nb: int) -> None:
         games_dic = self.db.get_unfinished_games(round_nb)
+        # Not streaming since at most 128 games so ~6s and it avoid parsing ndjson.
         r = self.http.post(LOOKUP_API, data=",".join(games_dic.keys()), headers=API_KEY, params={"moves": "false"})
-        rep = r.json()
-        for game in rep:
+        games = r.text.split('\n')[:-1]
+        log.debug(games)
+        for raw_game in games:
+            log.debug(raw_game)
+            game = json.loads(raw_game)
             res = game["status"]
             id_ = game["id"]
             log.info(f"Game {id_}, result: {res}")
@@ -271,7 +275,9 @@ def pair(round_nb: int) -> None:
 
 def result(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
-    pass
+    db = Db()
+    p = Pairing(db)
+    p.check_all_results(round_nb)
 
 def broadcast(round_nb: int) -> None:
     """Return game ids of the round `round_nb` separated by a space"""
