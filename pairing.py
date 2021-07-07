@@ -62,8 +62,8 @@ log = logging.getLogger("pair")
 log.setLevel(logging.DEBUG)
 format_string = "%(asctime)s | %(levelname)-8s | %(message)s"
 
-# 125000000 bytes = 125Mb
-handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=125000000, backupCount=3, encoding="utf8")
+# 125000000 bytes = 12.5Mb
+handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=12500000, backupCount=3, encoding="utf8")
 handler.setFormatter(logging.Formatter(format_string))
 handler.setLevel(logging.DEBUG)
 log.addHandler(handler)
@@ -71,6 +71,8 @@ log.addHandler(handler)
 handler_2 = logging.StreamHandler(sys.stdout)
 handler_2.setFormatter(logging.Formatter(format_string))
 handler_2.setLevel(logging.INFO)
+if __debug__:
+    handler_2.setLevel(logging.DEBUG)
 log.addHandler(handler_2)
 
 ###########
@@ -152,7 +154,8 @@ class Db:
             WHERE lichess_game_id IS NOT NULL AND round_nb = ?
             ''', (round_nb,)))
         log.info(f"Round {round_nb}, {len(raw_data)} games started")
-        return " ".join(raw_data)
+        log.debug(raw_data)
+        return " ".join((x[0] for x in raw_data))
 
     def add_game_result(self: Db, row_id: int, result: int) -> None:
         self.cur.execute('''UPDATE rounds
@@ -172,13 +175,13 @@ class FileHandler:
                 match = PLAYER_REGEX.match(line)
                 if match is None:
                     continue
-                log.info(match.groups())
+                log.debug(match.groups())
                 (table_number, player_1, player_2) = match.groups()
                 if int(table_number) % 2: # odd numbers have white player on left 
                     pair = Pair(white_player=player_1, black_player=player_2)
                 else:
                     pair = Pair(white_player=player_2, black_player=player_1)
-                log.info(pair)
+                log.debug(pair)
                 l.append(pair)
         return l
 
@@ -294,7 +297,7 @@ def main() -> None:
     "broadcast": broadcast,
     }
     parser.add_argument("command", choices=commands.keys(), help=doc(commands))
-    parser.add_argument("round_nb", type=int, help="The round number related to the action you want to do. Only used for `fetch`, `pair`, `result`")
+    parser.add_argument("round_nb", nargs='?', default=0, type=int, help="The round number related to the action you want to do. Only used for `fetch`, `pair`, `result`")
     args = parser.parse_args()
     commands[args.command](args.round_nb)
 
