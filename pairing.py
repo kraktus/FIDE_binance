@@ -236,9 +236,34 @@ class Pairing:
         for raw_game in games:
             log.debug(raw_game)
             game = json.loads(raw_game)
-            res = game["status"]
+            result = self.return_result_int(game)
             id_ = game["id"]
-            log.info(f"Game {id_}, result: {res}")
+            log.info(f"Game {id_}, result: {result}")
+            self.db.add_game_result(id_, result)
+
+    def return_result_int(self: Pairing, game: Dic[str, str]) -> Union[int, None]:
+        winner = game.get("winner")
+        status = game["status"]
+        if winner == "white":
+            return 1
+        elif winner == "black":
+            return 0
+        elif winner is None and status == "draw" or status == "stalemate":
+            return 2
+        return None
+
+    def test(self):
+        games_id = ["11tHUbnm", "ETSYCv5R", "KVPzep34", "uXxcDewp"]
+        # Not streaming since at most 128 games so ~6s and it avoid parsing ndjson.
+        r = self.http.post(LOOKUP_API, data=",".join(games_id), headers=API_KEY, params={"moves": "false"})
+        games = r.text.split('\n')[:-1]
+        log.debug(games)
+        for raw_game in games:
+            log.debug(raw_game)
+            game = json.loads(raw_game)
+            result = self.return_result_int(game)
+            id_ = game["id"]
+            log.info(f"Game {id_}, result: {result}")  
 
 
 
@@ -260,7 +285,7 @@ def test(*args) -> None:
     db = Db()
     f = FileHandler(db)
     p = Pairing(db)
-    p.create_game(Pair("test", "test2"))
+    p.test()
 
 def fetch(round_nb: int) -> None:
     """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
